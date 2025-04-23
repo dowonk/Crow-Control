@@ -1,0 +1,6 @@
+## Interface: 30300
+## SavedVariables: CrowAlertsCheck, RaidWarningsCheck, AutoRollCheck
+## Title: Crow Control
+## Notes: Show Crow's Cache alerts and raid management. Created by Luxe V1.0
+
+CrowControl.lua
