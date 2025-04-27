@@ -1,22 +1,22 @@
-if CrowAlertsCheck == nil then
-    CrowAlertsCheck = true
-end
-
 local CrowStart
 local CrowSynced
 local CrowStartTimer
 local CrowTimer
+local CrowTimerMin
+local CrowTimerSec
 local Location
-local Start
-local Stop
 local RollingAll
 local Rolls = {}
 local RollsIndex
 local RollsTimer = 1
 local Winners = {}
 local AutoInviting = false
-local AutoInvitingTimer = 120
+local AutoInvitingTimer
 local TradingName
+
+if CrowAlertsCheck == nil then
+    CrowAlertsCheck = true
+end
 
 local function CreateCheckButton(name, parent, text, tooltip, xOff, yOff)
     local checkButton = CreateFrame("CheckButton", name, parent, "ChatConfigCheckButtonTemplate")
@@ -26,6 +26,12 @@ local function CreateCheckButton(name, parent, text, tooltip, xOff, yOff)
 
     return checkButton
 end
+
+local CrowGuildButton = CreateFrame("Button", "CrowGuildButton", GuildFrameControlButton, "UIPanelButtonTemplate")
+CrowGuildButton:SetSize(100, 20)
+CrowGuildButton:SetText("Crow Control")
+CrowGuildButton:SetPoint("TOP", 0, 24)
+CrowGuildButton:SetScript("OnClick", function() CrowSettings:SetShown(not CrowSettings:IsShown()) end)
 
 local CrowSettings = CreateFrame("Frame", "CrowSettings", GuildFrame, "DefaultPanelTemplate")
 CrowSettings:SetBackdrop({
@@ -38,9 +44,9 @@ CrowSettings.text = CrowSettings:CreateFontString(nil, "OVERLAY", "GameFontNorma
 CrowSettings.text:SetPoint("TOP", 0, -4)
 CrowSettings.text:SetText("Crow Control Settings")
 CrowSettings:SetScript("OnHide", function() CrowSettings:Hide() end)
-CrowSettings:RegisterEvent("PLAYER_ENTERING_WORLD")
+CrowSettings:RegisterEvent("PLAYER_LOGIN")
 CrowSettings:SetScript("OnEvent", function(self, event, ...)
-    if event == "PLAYER_ENTERING_WORLD" then
+    if event == "PLAYER_LOGIN" then
         CrowAlertsBox:SetChecked(CrowAlertsCheck)
         RaidWarningsBox:SetChecked(RaidWarningsCheck)
         AutoRollBox:SetChecked(AutoRollCheck)
@@ -52,141 +58,36 @@ local CloseCrowSettings = CreateFrame("Button", "Close", CrowSettings, "UIPanelC
 CloseCrowSettings:SetPoint("TOPRIGHT", 6, 5)
 CloseCrowSettings:SetScript("OnClick", function() CrowSettings:Hide() end)
 
-local CrowAlerts = CreateFrame("Frame")
-CrowAlerts:SetPoint("TOP", -110, -5)
-CrowAlerts:SetSize(40, 40)
-CrowAlerts:SetMovable(true)
-CrowAlerts:EnableMouse(true)
-CrowAlerts:RegisterForDrag("LeftButton")
-CrowAlerts:SetScript("OnDragStart", CrowAlerts.StartMoving)
-CrowAlerts:SetScript("OnDragStop", CrowAlerts.StopMovingOrSizing)
-CrowAlerts.tex = CrowAlerts:CreateTexture()
-CrowAlerts.tex:SetAllPoints(CrowAlerts)
-CrowAlerts.tex:SetTexture("interface/icons/inv_petraven2_black")
-CrowAlerts.text = CrowAlerts:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-CrowAlerts.text:SetPoint("LEFT", 45, 0)
-CrowAlerts.text:SetJustifyH("LEFT")
-CrowAlerts:Hide()
-
-CrowAlerts:RegisterEvent("CHAT_MSG_SYSTEM")
-CrowAlerts:SetScript("OnEvent", function(self, event, ...)
-    if CrowAlertsBox:GetChecked() and event == "CHAT_MSG_SYSTEM" then
-        if string.find(arg1, "Crow's Cache") then
-            if not CrowAlerts:IsShown() then
-                CrowAlerts:Show()
-                PlaySound("SummonRavenLord")
-            end
-
-            if string.find(arg1, "near") then
-                Start, Stop = arg1:find("near "), arg1:find("!")
-                Location = string.gsub(arg1:sub(Start + 5, Stop - 1), "FF8000", "FF0000")
-            end
-
-            if string.find(arg1, "minute") or string.find(arg1, "seconds") then
-                CrowStart = true
-                CrowSynced = false
-                CrowStartTimer = GetTime()
-                Start = arg1:find("in")
-                if string.find(arg1, "minute") then
-                    CrowTimer = tonumber(arg1:match("%d+", Start)) * 60
-                elseif string.find(arg1, "seconds") then
-                    CrowTimer = tonumber(arg1:match("%d+", Start))
-                end
-            elseif string.find(arg1, "looted") or string.find(arg1, "materialized") then
-                CrowStart = false
-                if string.find(arg1, "looted") then
-                    Start, Stop = arg1:find("by "), arg1:find("!")
-                    if Location then
-                        CrowAlerts.text:SetText("Crow's Cache has been looted by |cFFFF0000" .. arg1:sub(Start + 3, Stop - 1) .. "|r in |cFFFF0000" .. Location .. "|r")
-                    else
-                        CrowAlerts.text:SetText("Crow's Cache has been looted by |cFFFF0000" .. arg1:sub(Start + 3, Stop - 1) .. "|r")
-                    end
-                elseif string.find(arg1, "materialized") then
-                    if Location then
-                        CrowAlerts.text:SetText("Crow's Cache has materialized in |cFFFF0000" .. Location .. "|r")
-                    else
-                        CrowAlerts.text:SetText("Crow's Cache has materialized!")
-                    end
-                end
-            end
-        end
-    end
-end)
-
-CrowAlerts:SetScript("OnUpdate", function(self, elapsed)
-    if CrowStart and not CrowSynced then
-        if elapsed <= 1 then
-            CrowSynced = true
-        elseif elapsed > 1 then
-            CrowTimer = CrowTimer - (GetTime() - CrowStartTimer)
-            return
-        end
-    end
-
-    if CrowStart then
-        CrowTimer = CrowTimer - elapsed
-        if CrowTimer >= 0 then
-            local CrowTimerMin = math.floor(CrowTimer / 60)
-            local CrowTimerSec = CrowTimer % 60
-            CrowAlerts.text:SetText("Crow's Cache is materializing in |cFFFF0000" .. Location .. "|r\nSpawning in |cFFFF0000" .. string.format("%02d:%02d", CrowTimerMin, CrowTimerSec) .. "|r")
-        end
-    end
-end)
-
-local CloseCrowAlerts = CreateFrame("Button", "CloseCrowAlerts", CrowAlerts, "UIPanelCloseButton")
-CloseCrowAlerts:SetPoint("LEFT", -25, 0)
-CloseCrowAlerts:SetScript("OnClick", function() 
-    CrowAlerts:Hide()
-end)
-
 local CrowAlertsBox = CreateCheckButton("CrowAlertsBox", CrowSettings, "Show Crow's Cache Alerts", "Shows location/timer on top of screen.", 5, -25)
 CrowAlertsBox:SetScript("OnClick", function()
 	if CrowAlertsBox:GetChecked() == nil then
-    	CrowAlertsBox:SetChecked(false)
 		CrowAlertsCheck = false
+        CrowAlertsBox:SetChecked(CrowAlertsCheck)
 		CrowAlerts:Hide()
-	else
-		CrowAlertsBox:SetChecked(true)
-		CrowAlertsCheck = true
-	end
-  end
-)
+    else
+        CrowAlertsCheck = CrowAlertsBox:GetChecked()
+        CrowAlertsBox:SetChecked(CrowAlertsCheck)
+    end
+end)
 
 local RaidWarningsBox = CreateCheckButton("RaidWarningsBox", CrowAlertsBox, "Announce Raid Warnings on Target", "Announces your target's name when you switch targets.", 0, -20)
 RaidWarningsBox:SetScript("OnClick", function()
-	if RaidWarningsBox:GetChecked() == nil then
-    	RaidWarningsBox:SetChecked(false)
-		RaidWarningsCheck = false
-	else
-		RaidWarningsBox:SetChecked(true)
-		RaidWarningsCheck = true
-	end
-  end
-)
+    RaidWarningsCheck = RaidWarningsBox:GetChecked()
+    RaidWarningsBox:SetChecked(RaidWarningsCheck)
+end)
 
 RaidWarningsBox:RegisterEvent("PLAYER_TARGET_CHANGED")
 RaidWarningsBox:SetScript("OnEvent", function(self, event, ...)
     if RaidWarningsBox:GetChecked() and event == "PLAYER_TARGET_CHANGED" and UnitCanAttack("player", "target") and UnitIsPlayer("target") and not UnitIsDeadOrGhost("player") and not UnitIsDeadOrGhost("target") and UnitInBattleground("player") == nil and IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) then
-        for i = 1, GetNumRaidMembers() do
-            if GetRaidRosterInfo(i) == UnitName("player") then
-                SendChatMessage(UnitName("target") .. " targetted by " .. UnitName("player"), "RAID_WARNING")
-                return
-            end
-        end
+        SendChatMessage("{Skull} " .. UnitName("target") .. " {Skull}", "RAID_WARNING")
     end
 end)
 
 local AutoRollBox = CreateCheckButton("AutoRollBox", RaidWarningsBox, "Auto Roll Loot", "Auto rolls Bloodforged Gear/Copper Marks. Must type prefix \"roll\" or \"rollall\" in raid chat", 0, -20)
 AutoRollBox:SetScript("OnClick", function()
-	if AutoRollBox:GetChecked() == nil then
-    	AutoRollBox:SetChecked(false)
-		AutoRollCheck = false
-	else
-		AutoRollBox:SetChecked(true)
-		AutoRollCheck = true
-	end
-  end
-)
+    AutoRollCheck = AutoRollBox:GetChecked()
+    AutoRollBox:SetChecked(AutoRollCheck)
+end)
 
 AutoRollBox:RegisterAllEvents("CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER")
 AutoRollBox:SetScript("OnEvent", function(self, event, ...)
@@ -244,33 +145,103 @@ AutoInviteButton:SetScript("OnClick", function()
     AutoInvitingTimer = 120
     AutoInviting = not AutoInviting
     AutoInviteButton:SetText(AutoInviting and "Stop Auto Invites" or "Start Auto Invites")
-    SendChatMessage(AutoInviting and "KAWKAW! Crow's Cache invites are starting! Type \"kawkaw\" for an invite!" or "Crow's Cache invites have stopped!", "GUILD")
+
+    if not AutoInviting then
+        SendChatMessage("Crow's Cache invites have stopped!", "GUILD")
+    elseif AutoInviting and Location and CrowTimer and CrowTimer > 0 then
+        SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite! Materializing in " .. CrowTimerMin .. " minute(s) in " .. Location .. ".", "GUILD")
+    else
+        SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite!", "GUILD")
+    end
 end)
 
 AutoInviteButton:RegisterAllEvents("CHAT_MSG_GUILD", "PARTY_MEMBERS_CHANGED", "UI_INFO_MESSAGE")
 AutoInviteButton:SetScript("OnEvent", function(self, event, ...)
-    if not AutoInviting then
-        return
-    end
-
-    if event == "CHAT_MSG_GUILD" and string.lower(arg1) == "kawkaw" and (not IsInGroup() or (IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) and not UnitInRaid(arg2)) or (IsPartyLeader() and not IsInRaid() and not UnitInParty(arg2))) then
+    if AutoInviting and event == "CHAT_MSG_GUILD" and string.lower(arg1) == "kawkaw" and (not IsInGroup() or (IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) and not UnitInRaid(arg2)) or (IsPartyLeader() == 1 and not IsInRaid() and not UnitInParty(arg2) == 1)) then
         InviteUnit(arg2)
 
-    elseif event == "PARTY_MEMBERS_CHANGED" and IsPartyLeader() == 1 then
-        if not IsInRaid() then
-            ConvertToRaid()
-        end
+    elseif AutoInviting and event == "PARTY_MEMBERS_CHANGED" and not IsInRaid() and IsPartyLeader() == 1 then
+        ConvertToRaid()
 
-    elseif event == "UI_INFO_MESSAGE" and string.find(arg1, "You cannot invite") then
+    elseif AutoInviting and event == "UI_INFO_MESSAGE" and string.find(arg1, "You cannot invite") then
         SendChatMessage("Invite failed! You must be in High Risk and Mercenary Mode.", "GUILD")
     end
 end)
 
-local CrowGuildButton = CreateFrame("Button", "CrowGuildButton", GuildFrameControlButton, "UIPanelButtonTemplate")
-CrowGuildButton:SetSize(100, 20)
-CrowGuildButton:SetText("Crow Control")
-CrowGuildButton:SetPoint("TOP", 0, 24)
-CrowGuildButton:SetScript("OnClick", function() CrowSettings:SetShown(not CrowSettings:IsShown()) end)
+local CrowAlerts = CreateFrame("Frame")
+CrowAlerts:SetPoint("TOP", -110, -5)
+CrowAlerts:SetSize(40, 40)
+CrowAlerts:SetMovable(true)
+CrowAlerts:EnableMouse(true)
+CrowAlerts:RegisterForDrag("LeftButton")
+CrowAlerts:SetScript("OnDragStart", CrowAlerts.StartMoving)
+CrowAlerts:SetScript("OnDragStop", CrowAlerts.StopMovingOrSizing)
+CrowAlerts.tex = CrowAlerts:CreateTexture()
+CrowAlerts.tex:SetAllPoints(CrowAlerts)
+CrowAlerts.tex:SetTexture("interface/icons/inv_petraven2_black")
+CrowAlerts.text = CrowAlerts:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+CrowAlerts.text:SetPoint("LEFT", 45, 0)
+CrowAlerts.text:SetJustifyH("LEFT")
+CrowAlerts:Hide()
+
+local CloseCrowAlerts = CreateFrame("Button", "CloseCrowAlerts", CrowAlerts, "UIPanelCloseButton")
+CloseCrowAlerts:SetPoint("LEFT", -25, 0)
+CloseCrowAlerts:SetScript("OnClick", function() 
+    CrowAlerts:Hide()
+end)
+
+CrowAlerts:RegisterEvent("CHAT_MSG_SYSTEM")
+CrowAlerts:SetScript("OnEvent", function(self, event, ...)
+    if CrowAlertsBox:GetChecked() and event == "CHAT_MSG_SYSTEM" then
+        if string.find(arg1, "Crow's Cache") then
+            if not CrowAlerts:IsShown() then
+                CrowAlerts:Show()
+                PlaySound("SummonRavenLord")
+            end
+
+            if string.find(arg1, "near") then
+                Location = arg1:sub(string.find(arg1, "near") + 15, string.find(arg1, "|r!") - 1)
+            end
+
+            if string.find(arg1, "minute") or string.find(arg1, "seconds") then
+                CrowStart = true
+                CrowSynced = false
+                CrowStartTimer = GetTime()
+
+                if string.find(arg1, "minute") then
+                    CrowTimer = tonumber(arg1:match("%d+", arg1:find("in"))) * 60
+                elseif string.find(arg1, "seconds") then
+                    CrowTimer = tonumber(arg1:match("%d+", arg1:find("in")))
+                end
+
+            elseif string.find(arg1, "looted") or string.find(arg1, "materialized") then
+                if string.find(arg1, "looted") then
+                    if Location then
+                        CrowAlerts.text:SetText("Crow's Cache has been looted!\nLooter: |cFFFF0000" .. arg1:sub(arg1:find("by") + 3, arg1:find("!") - 1) .. "|r\nLocation: |cFFFF0000" .. Location .. "|r")
+                    else
+                        CrowAlerts.text:SetText("Crow's Cache has been looted!\nLooter: |cFFFF0000" .. arg1:sub(arg1:find("by") + 3, arg1:find("!") - 1) .. "|r")
+                    end
+                elseif string.find(arg1, "materialized") then
+                    if Location then
+                        CrowAlerts.text:SetText("Crow's Cache has materialized!\nLocation: |cFFFF0000" .. Location .. "|r")
+                    else
+                        CrowAlerts.text:SetText("Crow's Cache has materialized!")
+                    end
+                end
+                
+                CrowStart = false
+                Location = nil
+                CrowTimer = nil
+                
+                if AutoInviting then
+                    AutoInviting = false
+                    SendChatMessage("Crow's Cache invites have stopped!", "GUILD")
+                    AutoInviteButton:SetText("Start Auto Invites")
+                end
+            end
+        end
+    end
+end)
 
 local TradeRollButton = CreateFrame("Button", "TradeRollButton", TradeFrameTradeButton, "UIPanelButtonTemplate")
 TradeRollButton:SetSize(160, 20)
@@ -290,7 +261,10 @@ TradeRollButton:SetScript("OnClick",function()
                 end
             end
 
-            if ItemFound then break end
+            if ItemFound then
+                ItemFound = false
+                break
+            end
         end
     end
 end)
@@ -328,11 +302,34 @@ end)
 
 local UpdateTimer = CreateFrame("Frame")
 UpdateTimer:SetScript("OnUpdate", function(self, elapsed)
+    if CrowStart and not CrowSynced then
+        if elapsed <= 1 then
+            CrowSynced = true
+        elseif elapsed > 1 then
+            CrowTimer = CrowTimer - (GetTime() - CrowStartTimer)
+            return
+        end
+    end
+
+    if CrowStart then
+        CrowTimer = CrowTimer - elapsed
+        if CrowTimer >= 0 then
+            CrowTimerMin = math.floor(CrowTimer / 60)
+            CrowTimerSec = CrowTimer % 60
+            CrowAlerts.text:SetText("Crow's Cache is materializing!\nLocation: |cFFFF0000" .. Location .. "|r\nTimer: |cFFFF0000" .. string.format("%02d:%02d", CrowTimerMin, CrowTimerSec) .. "|r")
+        end
+    end
+
     if AutoInviting then
         AutoInvitingTimer = AutoInvitingTimer - elapsed
         if AutoInvitingTimer <= 0 then
             AutoInvitingTimer = 120
-            SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite!", "GUILD")
+
+            if Location and CrowTimer and CrowTimer > 0 then
+                SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite! Materializing in " .. CrowTimerMin .. " minute(s) in " .. Location .. ".", "GUILD")
+            else
+                SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite!", "GUILD")
+            end
         end
     end
 
