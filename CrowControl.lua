@@ -1,21 +1,27 @@
-local CrowStart
-local CrowSynced
-local CrowStartTimer
-local CrowTimer
-local CrowTimerMin
-local CrowTimerSec
-local Location
-local RollingAll
-local Rolls = {}
-local RollsIndex
-local RollsTimer = 1
+local CrowLocation, CrowStart, CrowSynced, CrowStartTimer, CrowTimer, CrowTimerMin, CrowTimerSec
+local Enemies, GroupMembers, FeignedPlayers = {}, {}, {}
+local PingTimer = GetTime()
+local ZoneChange, ZoneChangeTimer = false, nil
+local RollingAll, RollsText, RollsIndex, RollsTimer = false, {}, nil, 1
 local Winners = {}
-local AutoInviting = false
-local AutoInvitingTimer
+local AutoInviting = false, AutoInvitingTimer
+local TargetName
 local TradingName
 
 if CrowAlertsCheck == nil then
     CrowAlertsCheck = true
+end
+
+local function RegisterEvents(self, ...)
+	for i=1,select("#", ...) do
+		self:RegisterEvent(select(i, ...))
+	end
+end
+
+local function UnregisterEvents(self, ...)
+	for i=1,select("#", ...) do
+		self:UnregisterEvent(select(i, ...))
+	end
 end
 
 local function CreateCheckButton(name, parent, text, tooltip, xOff, yOff)
@@ -27,11 +33,51 @@ local function CreateCheckButton(name, parent, text, tooltip, xOff, yOff)
     return checkButton
 end
 
+local function SendDetectedMessage(name, guildname)
+    local SubZoneText
+
+    if guildname then guildname = " <" .. guildname .. ">" else guildname = "" end
+    if GetSubZoneText() == "" then SubZoneText = "" else SubZoneText = GetSubZoneText() .. ", " end
+
+    if IsInGroup() and not IsInRaid() then
+        SendChatMessage("DETECTED: " .. name .. guildname .. " - " .. SubZoneText .. GetZoneText(), "PARTY")
+    elseif IsInRaid() then
+        SendChatMessage("DETECTED: " .. name .. guildname .. " - " .. SubZoneText .. GetZoneText(), "RAID")
+    elseif not IsInGroup() then
+        print("DETECTED: " .. name .. guildname .. " - " .. SubZoneText .. GetZoneText())
+    end
+end
+
+local function SendRollMessage(message)
+    if IsInGroup() and not IsInRaid() then
+        SendChatMessage(message, "PARTY")
+    elseif IsInRaid() and IsRaidLeader() ~= 1 and IsRaidOfficer() ~= 1 then
+        SendChatMessage(message, "RAID")
+    elseif IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) then
+        SendChatMessage(message, "RAID_WARNING")
+    end
+end
+
 local CrowGuildButton = CreateFrame("Button", "CrowGuildButton", GuildFrameControlButton, "UIPanelButtonTemplate")
 CrowGuildButton:SetSize(100, 20)
 CrowGuildButton:SetText("Crow Control")
 CrowGuildButton:SetPoint("TOP", 0, 24)
-CrowGuildButton:SetScript("OnClick", function() CrowSettings:SetShown(not CrowSettings:IsShown()) end)
+CrowGuildButton:SetScript("OnClick", function()
+    CrowSettings:SetShown(not CrowSettings:IsShown())
+
+    if CrowSettings:IsShown() then
+        if UnitBuff("player","High-Risk") and not UnitBuff("player","Mercenary for Hire!") then
+            RuleSetButton.text:SetText("Mercenary Mode")
+            RuleSetButton:SetAttribute("macrotext", "/cast Mercenary for Hire!")
+        elseif UnitBuff("player","Mercenary for Hire!") then
+            RuleSetButton.text:SetText("PVE Mode")
+            RuleSetButton:SetAttribute("macrotext", "/cast PvE Mode")
+        elseif not UnitBuff("player","High-Risk") then
+            RuleSetButton.text:SetText("High Risk/Merc")
+            RuleSetButton:SetAttribute("macrotext", "/cast High-Risk (PVP)\n/cast Mercenary for Hire!")
+        end
+    end
+end)
 
 local CrowSettings = CreateFrame("Frame", "CrowSettings", GuildFrame, "DefaultPanelTemplate")
 CrowSettings:SetBackdrop({
@@ -50,6 +96,19 @@ CrowSettings:SetScript("OnEvent", function(self, event, ...)
         CrowAlertsBox:SetChecked(CrowAlertsCheck)
         RaidWarningsBox:SetChecked(RaidWarningsCheck)
         AutoRollBox:SetChecked(AutoRollCheck)
+
+        if IsInGroup() then
+            GroupMembers = {}
+            for i = 1, GetNumGroupMembers() do
+                if not IsInRaid() and UnitName("party" .. i) ~= nil then
+                    GroupMembers[UnitName("party" .. i)] = true
+                elseif IsInRaid() then
+                    GroupMembers[UnitName("raid" .. i)] = true
+                end
+            end
+        else
+            GroupMembers = {}
+        end
     end
 end)
 CrowSettings:Hide()
@@ -57,116 +116,6 @@ CrowSettings:Hide()
 local CloseCrowSettings = CreateFrame("Button", "Close", CrowSettings, "UIPanelCloseButton")
 CloseCrowSettings:SetPoint("TOPRIGHT", 6, 5)
 CloseCrowSettings:SetScript("OnClick", function() CrowSettings:Hide() end)
-
-local CrowAlertsBox = CreateCheckButton("CrowAlertsBox", CrowSettings, "Show Crow's Cache Alerts", "Shows location/timer on top of screen.", 5, -25)
-CrowAlertsBox:SetScript("OnClick", function()
-	if CrowAlertsBox:GetChecked() == nil then
-		CrowAlertsCheck = false
-        CrowAlertsBox:SetChecked(CrowAlertsCheck)
-		CrowAlerts:Hide()
-    else
-        CrowAlertsCheck = CrowAlertsBox:GetChecked()
-        CrowAlertsBox:SetChecked(CrowAlertsCheck)
-    end
-end)
-
-local RaidWarningsBox = CreateCheckButton("RaidWarningsBox", CrowAlertsBox, "Announce Raid Warnings on Target", "Announces your target's name when you switch targets.", 0, -20)
-RaidWarningsBox:SetScript("OnClick", function()
-    RaidWarningsCheck = RaidWarningsBox:GetChecked()
-    RaidWarningsBox:SetChecked(RaidWarningsCheck)
-end)
-
-RaidWarningsBox:RegisterEvent("PLAYER_TARGET_CHANGED")
-RaidWarningsBox:SetScript("OnEvent", function(self, event, ...)
-    if RaidWarningsBox:GetChecked() and event == "PLAYER_TARGET_CHANGED" and UnitCanAttack("player", "target") and UnitIsPlayer("target") and not UnitIsDeadOrGhost("player") and not UnitIsDeadOrGhost("target") and UnitInBattleground("player") == nil and IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) then
-        SendChatMessage("{Skull} " .. UnitName("target") .. " {Skull}", "RAID_WARNING")
-    end
-end)
-
-local AutoRollBox = CreateCheckButton("AutoRollBox", RaidWarningsBox, "Auto Roll Loot", "Auto rolls Bloodforged Gear/Copper Marks. Must type prefix \"roll\" or \"rollall\" in raid chat", 0, -20)
-AutoRollBox:SetScript("OnClick", function()
-    AutoRollCheck = AutoRollBox:GetChecked()
-    AutoRollBox:SetChecked(AutoRollCheck)
-end)
-
-AutoRollBox:RegisterAllEvents("CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER")
-AutoRollBox:SetScript("OnEvent", function(self, event, ...)
-    if AutoRollBox:GetChecked() and (event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER") and (string.lower(arg1):sub(1, 7) == "rollall" or string.lower(arg1):sub(1, 4) == "roll") and arg2 == UnitName("player") and IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) then
-        if string.lower(arg1):sub(1, 7) == "rollall" then
-            local winner
-            local item
-            Winners = {}
-
-            for i = 0, 5 do
-                for j = 1, GetContainerNumSlots(i) do
-                    if GetContainerItemInfo(i,j) ~= nil and (string.find(select(7,GetContainerItemInfo(i,j)), "Bloodforged") or string.find(select(7,GetContainerItemInfo(i,j)), "Copper Mark of War")) then
-                        winner = GetRaidRosterInfo(math.random(1, GetNumRaidMembers()))
-                        item = select(7,GetContainerItemInfo(i,j))
-                        table.insert(Rolls, winner .. " wins " .. item)
-                        
-                        if not Winners[winner] then
-                            Winners[winner] = {item}
-                        else
-                            table.insert(Winners[winner], item)
-                        end
-                    end
-                end
-            end
-
-            if #Rolls == 1 then
-                SendChatMessage(Rolls[1], "RAID_WARNING")
-                Rolls = {}
-                return
-            end
-            
-            RollingAll = true
-            RollsIndex = #Rolls
-            SendChatMessage(Rolls[RollsIndex], "RAID_WARNING")
-            
-        elseif string.lower(arg1):sub(1, 4) == "roll" then
-            SendChatMessage(GetRaidRosterInfo(math.random(1, GetNumRaidMembers())) .. " wins " .. arg1:sub(5), "RAID_WARNING")
-        end
-    end
-end)
-
-local AutoInviteButton = CreateFrame("Button", "AutoInviteButton", CrowSettings, "UIPanelButtonTemplate")
-AutoInviteButton:SetSize(150, 50)
-AutoInviteButton:SetText("Start Auto Invites")
-AutoInviteButton:SetPoint("BOTTOM")
-AutoInviteButton:SetScript("OnClick", function()
-    if not AutoInviting and not UnitBuff("player", "Mercenary for Hire!") then
-        print("Auto invite failed! You must be in High Risk and Mercenary Mode.")
-        return
-    elseif not AutoInviting and (IsInGroup() and IsPartyLeader() ~= 1 and not IsInRaid() or IsInRaid() and IsRaidLeader() ~= 1 and IsRaidOfficer() ~= 1) then
-        print("Auto invite failed! You must be a group leader.")
-        return
-    end
-
-    AutoInvitingTimer = 120
-    AutoInviting = not AutoInviting
-    AutoInviteButton:SetText(AutoInviting and "Stop Auto Invites" or "Start Auto Invites")
-
-    if not AutoInviting then
-        SendChatMessage("Crow's Cache invites have stopped!", "GUILD")
-    elseif AutoInviting and Location and CrowTimer and CrowTimer > 0 then
-        SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite! Materializing in " .. CrowTimerMin .. " minute(s) in " .. Location .. ".", "GUILD")
-    else
-        SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite!", "GUILD")
-    end
-end)
-
-AutoInviteButton:RegisterAllEvents("CHAT_MSG_GUILD", "PARTY_MEMBERS_CHANGED", "UI_INFO_MESSAGE")
-AutoInviteButton:SetScript("OnEvent", function(self, event, ...)
-    if AutoInviting and event == "CHAT_MSG_GUILD" and string.lower(arg1) == "kawkaw" and (not IsInGroup() or (IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) and not UnitInRaid(arg2)) or (IsPartyLeader() == 1 and not IsInRaid() and not UnitInParty(arg2) == 1)) then
-        InviteUnit(arg2)
-
-    elseif AutoInviting and event == "PARTY_MEMBERS_CHANGED" and not IsInRaid() and IsPartyLeader() == 1 then
-        ConvertToRaid()
-
-    elseif AutoInviting and event == "UI_INFO_MESSAGE" and string.find(arg1, "You cannot invite") then
-        SendChatMessage("Invite failed! You must be in High Risk and Mercenary Mode.", "GUILD")
-    end
-end)
 
 local CrowAlerts = CreateFrame("Frame")
 CrowAlerts:SetPoint("TOP", -110, -5)
@@ -184,12 +133,6 @@ CrowAlerts.text:SetPoint("LEFT", 45, 0)
 CrowAlerts.text:SetJustifyH("LEFT")
 CrowAlerts:Hide()
 
-local CloseCrowAlerts = CreateFrame("Button", "CloseCrowAlerts", CrowAlerts, "UIPanelCloseButton")
-CloseCrowAlerts:SetPoint("LEFT", -25, 0)
-CloseCrowAlerts:SetScript("OnClick", function() 
-    CrowAlerts:Hide()
-end)
-
 CrowAlerts:RegisterEvent("CHAT_MSG_SYSTEM")
 CrowAlerts:SetScript("OnEvent", function(self, event, ...)
     if CrowAlertsBox:GetChecked() and event == "CHAT_MSG_SYSTEM" then
@@ -200,7 +143,7 @@ CrowAlerts:SetScript("OnEvent", function(self, event, ...)
             end
 
             if string.find(arg1, "near") then
-                Location = arg1:sub(string.find(arg1, "near") + 15, string.find(arg1, "|r!") - 1)
+                CrowLocation = arg1:sub(string.find(arg1, "near") + 15, string.find(arg1, "|r!") - 1)
             end
 
             if string.find(arg1, "minute") or string.find(arg1, "seconds") then
@@ -216,21 +159,21 @@ CrowAlerts:SetScript("OnEvent", function(self, event, ...)
 
             elseif string.find(arg1, "looted") or string.find(arg1, "materialized") then
                 if string.find(arg1, "looted") then
-                    if Location then
-                        CrowAlerts.text:SetText("Crow's Cache has been looted!\nLooter: |cFFFF0000" .. arg1:sub(arg1:find("by") + 3, arg1:find("!") - 1) .. "|r\nLocation: |cFFFF0000" .. Location .. "|r")
+                    if CrowLocation then
+                        CrowAlerts.text:SetText("Crow's Cache has been looted!\nLooter: |cFFFF0000" .. arg1:sub(arg1:find("by") + 3, arg1:find("!") - 1) .. "|r\nLocation: |cFFFF0000" .. CrowLocation .. "|r")
                     else
                         CrowAlerts.text:SetText("Crow's Cache has been looted!\nLooter: |cFFFF0000" .. arg1:sub(arg1:find("by") + 3, arg1:find("!") - 1) .. "|r")
                     end
                 elseif string.find(arg1, "materialized") then
-                    if Location then
-                        CrowAlerts.text:SetText("Crow's Cache has materialized!\nLocation: |cFFFF0000" .. Location .. "|r")
+                    if CrowLocation then
+                        CrowAlerts.text:SetText("Crow's Cache has materialized!\nLocation: |cFFFF0000" .. CrowLocation .. "|r")
                     else
                         CrowAlerts.text:SetText("Crow's Cache has materialized!")
                     end
                 end
-                
+
+                CrowLocation = nil
                 CrowStart = false
-                Location = nil
                 CrowTimer = nil
                 
                 if AutoInviting then
@@ -243,6 +186,227 @@ CrowAlerts:SetScript("OnEvent", function(self, event, ...)
     end
 end)
 
+local CloseCrowAlerts = CreateFrame("Button", "CloseCrowAlerts", CrowAlerts, "UIPanelCloseButton")
+CloseCrowAlerts:SetPoint("LEFT", -25, 0)
+CloseCrowAlerts:SetScript("OnClick", function()
+    CrowAlerts:Hide()
+end)
+
+local CrowAlertsBox = CreateCheckButton("CrowAlertsBox", CrowSettings, "Show Crow's Cache Alerts", "Shows location/timer on top of screen.", 5, -25)
+CrowAlertsBox:SetScript("OnClick", function()
+	if CrowAlertsBox:GetChecked() == nil then
+		CrowAlertsCheck = false
+        CrowAlertsBox:SetChecked(CrowAlertsCheck)
+		CrowAlerts:Hide()
+    else
+        CrowAlertsCheck = CrowAlertsBox:GetChecked()
+        CrowAlertsBox:SetChecked(CrowAlertsCheck)
+    end
+end)
+
+local RaidWarningsBox = CreateCheckButton("RaidWarningsBox", CrowAlertsBox, "Announce Warnings on Pings/Enemies", "Announces pings, nearby enemies, and your target's name.", 0, -20)
+RaidWarningsBox:SetScript("OnClick", function()
+    RaidWarningsCheck = RaidWarningsBox:GetChecked()
+    RaidWarningsBox:SetChecked(RaidWarningsCheck)
+    TargetName = nil
+end)
+
+RegisterEvents(RaidWarningsBox, "PLAYER_TARGET_CHANGED", "PLAYER_LEAVE_COMBAT", "MINIMAP_PING", "COMBAT_LOG_EVENT", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED", "PLAYER_LEAVING_WORLD", "ZONE_CHANGED", "ZONE_CHANGED_NEW_AREA")
+RaidWarningsBox:SetScript("OnEvent", function(self, event, ...)
+    if not RaidWarningsBox:GetChecked() then return end
+
+    if event == "PLAYER_TARGET_CHANGED" and TargetName ~= UnitName("target") and UnitCanAttack("player", "target") and UnitIsPlayer("target") and not UnitIsDeadOrGhost("player") and not UnitIsDeadOrGhost("target") and IsInInstance() == nil and IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) then
+        SendRollMessage("{Skull}" .. UnitName("target") .. "{Skull}")
+        TargetName = UnitName("target")
+
+    elseif event == "PLAYER_LEAVE_COMBAT" and TargetName and not UnitCanAttack("player", "target") and not UnitIsPlayer("target") then
+        TargetName = nil
+
+    elseif event == "MINIMAP_PING" and IsInInstance() == nil and IsInRaid() and (IsRaidLeader() == 1 or IsRaidOfficer() == 1) and GetTime() - PingTimer >= 1 then
+        SendRollMessage(UnitName(arg1) .. " pinged the minimap!")
+        PingTimer = GetTime()
+
+    elseif event == "COMBAT_LOG_EVENT" and not ZoneChange and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        if arg2 == "SPELL_AURA_APPLIED" or arg2 == "SPELL_AURA_REMOVED" then
+            if arg12 == "BUFF" and not Enemies[arg7] and not GroupMembers[arg7] and UnitName("player") ~= arg7 and string.sub(arg6, 5, 5) == "0" then
+                Enemies[arg7] = GetTime()
+                SendDetectedMessage(arg7, nil)
+            end
+
+        elseif arg4 ~= nil and not Enemies[arg4] and not GroupMembers[arg4] and UnitName("player") ~= arg4 and string.sub(arg3, 5, 5) == "0" then
+            Enemies[arg4] = GetTime()
+            SendDetectedMessage(arg4, nil)
+
+        elseif arg7 ~= nil and not Enemies[arg7] and not GroupMembers[arg7] and UnitName("player") ~= arg7 and string.sub(arg6, 5, 5) == "0" then
+            Enemies[arg7] = GetTime()
+            SendDetectedMessage(arg7, nil)
+        end
+
+    elseif event == "PLAYER_TARGET_CHANGED" and not ZoneChange and UnitName("player") ~= UnitName("target") and UnitIsPlayer("target") and not GroupMembers[UnitName("target")] and not Enemies[UnitName("target")] and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        Enemies[UnitName("target")] = GetTime()
+        SendDetectedMessage(UnitName("target"), GetGuildInfo("target"))
+
+    elseif event == "UPDATE_MOUSEOVER_UNIT" and not ZoneChange and UnitName("player") ~= UnitName("mouseover") and UnitIsPlayer("mouseover") and not GroupMembers[UnitName("mouseover")] and not Enemies[UnitName("mouseover")] and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        Enemies[UnitName("mouseover")] = GetTime()
+        SendDetectedMessage(UnitName("mouseover"), GetGuildInfo("mouseover"))
+
+    elseif event == "NAME_PLATE_UNIT_ADDED" and not ZoneChange and not Enemies[UnitName(arg1)] and UnitIsPlayer(arg1) and not GroupMembers[UnitName(arg1)] and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        Enemies[UnitName(arg1)] = GetTime()
+        SendDetectedMessage(UnitName(arg1), GetGuildInfo(arg1))
+
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" and not ZoneChange and Enemies[arg1] and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        if arg2 == "Feign Death" then
+            FeignedPlayers[arg1] = true
+        end
+
+        if arg2 == "Stealth" or arg2 == "Shadowmeld" or arg2 == "Vanish" then
+            Enemies[arg1] = nil
+        end
+
+    elseif event == "COMBAT_LOG_EVENT" and arg2 == "UNIT_DIED" and not ZoneChange and FeignedPlayers[arg1] and Enemies[arg1] and GetZonePVPInfo() == "contested" and IsInInstance() == nil then
+        Enemies[arg1] = nil
+        FeignedPlayers[arg1] = nil
+
+    elseif event == "PLAYER_LEAVING_WORLD" or event == "ZONE_CHANGED" or event == "ZONE_CHANGED_NEW_AREA" then
+        ZoneChange = true
+        ZoneChangeTimer = 2
+
+        for k, v in pairs(Enemies) do
+            if GetTime() - v >= 10 then
+                Enemies[k] = nil
+            end
+        end
+    end
+end)
+
+local AutoRollBox = CreateCheckButton("AutoRollBox", RaidWarningsBox, "Auto Roll Loot", "Auto rolls Bloodforged Gear/Copper Marks. Type \"/rollall\" to roll.", 0, -20)
+AutoRollBox:SetScript("OnClick", function()
+    AutoRollCheck = AutoRollBox:GetChecked()
+    AutoRollBox:SetChecked(AutoRollCheck)
+end)
+
+SLASH_ROLLALL1 = "/rollall"
+SlashCmdList["ROLLALL"] = function(arg)
+    if not IsInGroup() then
+        return
+    end
+    
+    local winner
+    local item
+    local OnlineGroupMembers = {}
+    RollsText = {}
+    Winners = {}
+    local prefix = IsInRaid() and "raid" or "party"
+
+    for i = 1, GetNumGroupMembers() do
+        local unit = prefix .. i
+        if UnitIsConnected(unit) == 1 then
+            table.insert(OnlineGroupMembers, (UnitName(unit)))
+        end
+    end
+
+    if not IsInRaid() then
+        table.insert(OnlineGroupMembers, (UnitName("player")))
+    end
+
+    for i = 0, 5 do
+        for j = 1, GetContainerNumSlots(i) do
+            if GetContainerItemInfo(i,j) ~= nil and (string.find(select(7,GetContainerItemInfo(i,j)), "Bloodforged") and select(4,GetContainerItemInfo(i,j)) == 4 or string.find(select(7,GetContainerItemInfo(i,j)), "Copper Mark of War")) then
+                winner = OnlineGroupMembers[math.random(#OnlineGroupMembers)]
+                item = select(7,GetContainerItemInfo(i,j))
+                table.insert(RollsText, winner .. " wins " .. item)
+                
+                if not Winners[winner] then
+                    Winners[winner] = {item}
+                else
+                    table.insert(Winners[winner], item)
+                end
+            end
+        end
+    end
+
+    if #RollsText == 1 then
+        SendRollMessage(RollsText[1])
+        RollsText = {}
+    elseif #RollsText > 1 then
+        RollingAll = true
+        RollsIndex = #RollsText
+        SendRollMessage(RollsText[RollsIndex])
+    end
+end
+
+local AutoInviteButton = CreateFrame("Button", "AutoInviteButton", CrowSettings, "UIPanelButtonTemplate")
+AutoInviteButton:SetSize(140, 30)
+AutoInviteButton:SetText("Start Auto Invites")
+AutoInviteButton:SetPoint("BOTTOM")
+AutoInviteButton:SetScript("OnClick", function()
+    if not AutoInviting and (IsInGroup() and IsPartyLeader() ~= 1 and not IsInRaid() or IsInRaid() and IsRaidLeader() ~= 1 and IsRaidOfficer() ~= 1) then
+        print("Auto invite failed! You must be a group leader.")
+        return
+    end
+
+    AutoInvitingTimer = 120
+    AutoInviting = not AutoInviting
+    AutoInviteButton:SetText(AutoInviting and "Stop Auto Invites" or "Start Auto Invites")
+
+    if not AutoInviting then
+        SendChatMessage("Crow's Cache invites have stopped!", "GUILD")
+    elseif AutoInviting and CrowLocation and CrowTimer and CrowTimer > 0 then
+        SendChatMessage("Crow's Cache is materializing in " .. CrowTimerMin .. " minute(s) in " .. CrowLocation .. ". Type \"inv\" for an invite! Must be " .. GetSpellLink("High-Risk (PVP)") .. GetSpellLink("Mercenary for Hire!") .. ".", "GUILD")
+    else
+        SendChatMessage("Crow's Cache invites have started! Type \"inv\" for an invite! Must be " .. GetSpellLink("High-Risk (PVP)") .. GetSpellLink("Mercenary for Hire!") .. ".", "GUILD")
+    end
+end)
+
+RuleSetButton = CreateFrame("Button", nil, AutoInviteButton, "SecureActionButtonTemplate, UIPanelButtonTemplate")
+RuleSetButton:SetSize(140, 30)
+RuleSetButton:SetPoint("TOP", AutoInviteButton, 0, 28)
+RuleSetButton:SetAttribute("type", "macro")
+RuleSetButton.text = RuleSetButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+RuleSetButton.text:SetPoint("CENTER")
+RuleSetButton.text:SetFont("Fonts\\FRIZQT__.TTF", 11)
+
+RuleSetButton:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+RuleSetButton:SetScript("OnEvent", function(self, event, ...)
+    if event == "UNIT_SPELLCAST_SUCCEEDED" and arg2 == "High Risk (PvP)" then
+        RuleSetButton.text:SetText("Mercenary Mode")
+        RuleSetButton:SetAttribute("macrotext", "/cast Mercenary for Hire!")
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" and arg2 == "Mercenary for Hire!" then
+        RuleSetButton.text:SetText("PVE Mode")
+        RuleSetButton:SetAttribute("macrotext", "/cast PvE Mode")
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" and arg2 == "PvE Mode" then
+        RuleSetButton.text:SetText("High Risk/Merc")
+        RuleSetButton:SetAttribute("macrotext", "/cast High-Risk (PVP)\n/cast Mercenary for Hire!")
+    end
+end)
+
+RegisterEvents(AutoInviteButton, "CHAT_MSG_GUILD", "PARTY_MEMBERS_CHANGED", "UI_INFO_MESSAGE")
+AutoInviteButton:SetScript("OnEvent", function(self, event, ...)
+    if AutoInviting and event == "CHAT_MSG_GUILD" and (string.lower(arg1) == "kawkaw" or string.lower(arg1) == "kaw" or string.lower(arg1) == "kaw kaw" or string.lower(arg1) == "crow" or string.lower(arg1) == "invite" or string.lower(arg1) == "inv" or string.lower(arg1) == "+") and (not IsInGroup() or IsRaidLeader() == 1 or IsRaidOfficer() == 1 or IsPartyLeader() == 1) then
+        InviteUnit(arg2)
+
+    elseif event == "PARTY_MEMBERS_CHANGED" then
+        if AutoInviting then
+            if not IsInRaid() and IsPartyLeader() == 1 then
+                ConvertToRaid()
+            end
+        end
+
+        if IsInGroup() then
+            GroupMembers = {}
+            for i = 1, GetNumGroupMembers() do
+                if not IsInRaid() and UnitName("party" .. i) ~= nil then
+                    GroupMembers[UnitName("party" .. i)] = true
+                elseif IsInRaid() then
+                    GroupMembers[UnitName("raid" .. i)] = true
+                end
+            end
+        else
+            GroupMembers = {}
+        end
+    end
+end)
+
 local TradeRollButton = CreateFrame("Button", "TradeRollButton", TradeFrameTradeButton, "UIPanelButtonTemplate")
 TradeRollButton:SetSize(160, 20)
 TradeRollButton:SetText("Trade Winnings")
@@ -250,31 +414,42 @@ TradeRollButton:SetPoint("Left", -170, 2)
 TradeRollButton:Hide()
 TradeRollButton:SetScript("OnClick",function()
     local ItemFound
+    local WonSlots = {}
 
     for loot = 1, #Winners[TradingName] do
+        ItemFound = false
+
         for i = 0, 5 do
+            WonSlots[i] = WonSlots[i] or {}
+            
             for j = 1, GetContainerNumSlots(i) do
-                if GetContainerItemInfo(i,j) ~= nil and select(7,GetContainerItemInfo(i,j)) == Winners[TradingName][loot] then
+                if not WonSlots[i][j] and GetContainerItemInfo(i,j) ~= nil and select(7,GetContainerItemInfo(i,j)) == Winners[TradingName][loot] then
                     UseContainerItem(i,j)
                     ItemFound = true
+                    WonSlots[i][j] = true
                     break
                 end
             end
 
             if ItemFound then
-                ItemFound = false
                 break
             end
         end
     end
+
+    if GetTradePlayerItemLink(1) ~= nil then
+        AcceptTrade()
+    end
 end)
 
-TradeRollButton:RegisterAllEvents("TRADE_SHOW", "TRADE_CLOSED")
+RegisterEvents(TradeRollButton, "TRADE_SHOW", "TRADE_CLOSED")
 TradeRollButton:SetScript("OnEvent", function(self, event, ...)
     if event == "TRADE_SHOW" then
         if Winners[UnitName("NPC")] then
             TradingName = UnitName("NPC")
             TradeRollButton:Show()
+        else
+            TradeRollButton:Hide()
         end
 
     elseif event == "TRADE_CLOSED" then
@@ -294,7 +469,6 @@ TradeRollButton:SetScript("OnEvent", function(self, event, ...)
         
             if not ItemExists then
                 Winners[TradingName] = nil
-                TradeRollButton:Hide()
             end
         end
     end
@@ -316,7 +490,14 @@ UpdateTimer:SetScript("OnUpdate", function(self, elapsed)
         if CrowTimer >= 0 then
             CrowTimerMin = math.floor(CrowTimer / 60)
             CrowTimerSec = CrowTimer % 60
-            CrowAlerts.text:SetText("Crow's Cache is materializing!\nLocation: |cFFFF0000" .. Location .. "|r\nTimer: |cFFFF0000" .. string.format("%02d:%02d", CrowTimerMin, CrowTimerSec) .. "|r")
+            CrowAlerts.text:SetText("Crow's Cache is materializing!\nLocation: |cFFFF0000" .. CrowLocation .. "|r\nTimer: |cFFFF0000" .. string.format("%02d:%02d", CrowTimerMin, CrowTimerSec) .. "|r")
+        end
+    end
+
+    if ZoneChange then
+        ZoneChangeTimer = ZoneChangeTimer - elapsed
+        if ZoneChangeTimer <= 0 then
+            ZoneChange = false
         end
     end
 
@@ -325,10 +506,10 @@ UpdateTimer:SetScript("OnUpdate", function(self, elapsed)
         if AutoInvitingTimer <= 0 then
             AutoInvitingTimer = 120
 
-            if Location and CrowTimer and CrowTimer > 0 then
-                SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite! Materializing in " .. CrowTimerMin .. " minute(s) in " .. Location .. ".", "GUILD")
+            if CrowLocation and CrowTimer and CrowTimer > 0 then
+                SendChatMessage("Crow's Cache is materializing in " .. CrowTimerMin .. " minute(s) in " .. CrowLocation .. ". Type \"inv\" for an invite! Must be " .. GetSpellLink("High-Risk (PVP)") .. GetSpellLink("Mercenary for Hire!") .. ".", "GUILD")
             else
-                SendChatMessage("KAWKAW! Crow's Cache invites have started! Type \"kawkaw\" for an invite!", "GUILD")
+                SendChatMessage("Crow's Cache invites have started! Type \"inv\" for an invite! Must be " .. GetSpellLink("High-Risk (PVP)") .. GetSpellLink("Mercenary for Hire!") .. ".", "GUILD")
             end
         end
     end
@@ -336,14 +517,16 @@ UpdateTimer:SetScript("OnUpdate", function(self, elapsed)
     if RollingAll then
         RollsTimer = RollsTimer - elapsed
         if RollsTimer <= 0 then
-            RollsTimer = 1
-            RollsIndex = RollsIndex - 1
-            SendChatMessage(Rolls[RollsIndex], "RAID_WARNING")
-
             if RollsIndex == 1 then
                 RollingAll = false
-                Rolls = {}
+                RollsTimer = 1
+                SendRollMessage("Trade with " .. UnitName("player") .. " if you won!")
+                return
             end
+
+            RollsTimer = 1
+            RollsIndex = RollsIndex - 1
+            SendRollMessage(RollsText[RollsIndex])
         end
     end
 end)
